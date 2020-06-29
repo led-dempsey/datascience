@@ -1,0 +1,280 @@
+---
+title: "MyBank - Cart- Classification and Decision Trees"
+date: "28/06/2020"
+output: html_notebook
+Author: Luiz Eduardo Dempsey
+---
+
+1. Classification and Regression Tree - CART
+
+```{r}
+setwd("C:/Users/adminsa/Desktop/Pos Graduacao/Machine Learning/Mybank")
+
+ploan <- read.table("My Bank Case Study-dataset.csv", sep = ",", header = TRUE)
+
+```
+
+```{r}
+dim(ploan)
+names(ploan)
+str(ploan)
+colSums(is.na(ploan))
+
+ploan$FLG_HAS_CC <- as.factor(ploan$FLG_HAS_CC)
+ploan$FLG_HAS_ANY_CHGS <- as.factor(ploan$FLG_HAS_ANY_CHGS)
+ploan$FLG_HAS_NOMINEE <- as.factor(ploan$FLG_HAS_NOMINEE)
+ploan$FLG_HAS_OLD_LOAN <- as.factor(ploan$FLG_HAS_OLD_LOAN)
+
+```
+
+```{r}
+library(caret)
+set.seed(111)
+
+trainIndex <- createDataPartition(ploan$TARGET,p=0.7,list = FALSE,times = 1)
+
+train.data <- ploan[trainIndex, ]
+length(which(train.data$TARGET ==  1))*100/nrow(train.data)
+dim(train.data)
+
+test.data  <- ploan[-trainIndex,]
+length(which(test.data$TARGET ==  1))*100/nrow(test.data)
+dim(test.data)
+
+```
+
+Model Building - CART (Unbalanced Dataset)-Setting the control parameter inputs for rpart
+```{r}
+library(rpart)
+r.ctrl <- rpart.control(minsplit = 100,
+                        minbucket = 10,
+                        cp = 0,
+                        xval = 10
+                        )
+```
+
+```{r}
+cart.dev <- train.data
+names(cart.dev)
+
+m1 <- rpart(formula = TARGET~.,
+            data = cart.dev[,-c(1,11)],
+            method = "class",
+            control = r.ctrl)
+
+printcp(m1)
+
+library(rattle)
+library(RColorBrewer) 
+
+fancyRpartPlot(m1)
+
+```
+
+```{r}
+plotcp(m1)
+
+ptree<- prune(m1, cp= 0.0022 ,"CP") 
+printcp(ptree)
+  
+```
+
+```{r}
+fancyRpartPlot(ptree, 
+               uniform = TRUE, 
+               main = "Final Tree", 
+               palettes = c("Blues", "Reds")
+               )
+```
+Measurements KPIs for CART
+Rank Ordering, KS, Area Under Curve (AUC), Gini Coefficient, Classification Error
+
+Lets Predict The Data:
+```{r}
+cart.dev$predict.class = predict(ptree, cart.dev, type = "class")
+cart.dev$predict.score = predict(ptree, cart.dev, type = "prob")
+
+```
+
+Deciling
+```{r}
+library(StatMeasures)
+
+decile <- function(x){
+  deciles <- vector(length=10)
+  for (i in seq(0.1,1,.1)){
+    deciles[i*10] <- quantile(x, i, na.rm=T)
+  }
+      return (
+    ifelse(x<deciles[1], 1,
+           ifelse(x<deciles[2], 2,
+                  ifelse(x<deciles[3], 3,
+                         ifelse(x<deciles[4], 4,
+                                ifelse(x<deciles[5], 5,
+                                       ifelse(x<deciles[6], 6,
+                                              ifelse(x<deciles[7], 7,
+                                                     ifelse(x<deciles[8], 8,
+                                                            ifelse(x<deciles[9], 9, 10
+                                                            ))))))))))
+}
+
+
+
+cart.dev$deciles <- decile(cart.dev$predict.score[,2])
+
+```
+
+Ranking the Code
+```{r}
+library(data.table) 
+library(scales)
+
+tmp_DT.dev = data.table(cart.dev)
+
+rank.dev <- tmp_DT[, list(cnt=length(TARGET),
+                      cnt_resp=sum(TARGET==1),
+                      cnt_non_resp=sum(TARGET==0)
+                      ), by=deciles][order(-deciles)]
+
+rank.dev$rrate <- round(rank.dev$cnt_resp / rank.dev$cnt,4); 
+rank.dev$cum_resp <- cumsum(rank.dev$cnt_resp) 
+rank.dev$cum_non_resp <- cumsum(rank.dev$cnt_non_resp) 
+rank.dev$cum_rel_resp <- round(rank.dev$cum_resp / sum(rank.dev$cnt_resp),4); 
+rank.dev$cum_rel_non_resp <- round(rank.dev$cum_non_resp / sum(rank.dev$cnt_non_resp),4); 
+rank.dev$ks <- abs(rank.dev$cum_rel_resp - rank.dev$cum_rel_non_resp) * 100; 
+rank.dev$rrate <- percent(rank.dev$rrate) 
+rank.dev$cum_rel_resp <- percent(rank.dev$cum_rel_resp) 
+rank.dev$cum_rel_non_resp <- percent(rank.dev$cum_rel_non_resp) 
+rank.dev
+
+```
+
+KS and Area under Curve
+```{r}
+library(ROCR)
+
+library(ineq)
+
+pred.dev <- prediction(cart.dev$predict.score[,2], cart.dev$TARGET) 
+perf.dev <- performance(pred.dev, "tpr", "fpr") 
+
+KS.dev <- max(attr(perf.dev, 'y.values')[[1]]-attr(perf.dev, 'x.values')[[1]]) 
+
+auc.dev <- performance(pred.dev,"auc"); 
+auc.dev <- as.numeric(auc.dev@y.values) 
+
+gini.dev = ineq(cart.dev$predict.score[,2], type="Gini") 
+with(cart.dev, table(TARGET, predict.class)) 
+
+plot(perf.dev)
+
+```
+
+cart.dev - Confusion Matrix, using CARET and am excellent library that helps us not just bringing the accuracy, but others fine measurements such as:
+sensivity, Specificity
+```{r}
+library(caret)
+library(e1071)
+
+class(cart.dev$TARGET)
+class(cart.dev$predict.class)
+
+cart.dev$TARGET = as.factor(cart.dev$TARGET)
+cm.dev = confusionMatrix(cart.dev$predict.class, cart.dev$TARGET, positive = "1")
+print(cm.dev)
+
+```
+
+```{r}
+library(rpart)
+cart.holdout <- test.data
+names(test.data)
+
+names(cart.holdout)
+
+m2 <- rpart(formula = TARGET~.,
+            data = cart.holdout[,-c(1,11)],
+            method = "class",
+            control = r.ctrl)
+
+printcp(m2)
+
+library(rattle)
+library(RColorBrewer) 
+
+fancyRpartPlot(m2)
+
+```
+
+```{r}
+cart.holdout$predict.class = predict(ptree, cart.holdout, type = "class")
+cart.holdout$predict.score = predict(ptree, cart.holdout, type = "prob")
+
+```
+
+Deciling, already done that wih Development subset, just add a new collumn in holdout subset
+```{r}
+cart.holdout$deciles <- decile(cart.holdout$predict.score[,2])
+
+View(cart.holdout)
+```
+
+Ranking the Code
+```{r}
+library(data.table) 
+library(scales)
+
+tmp_DT.holdout = data.table(cart.holdout)
+
+rank.holdout <- tmp_DT.holdout[, list(cnt=length(TARGET),
+                      cnt_resp=sum(TARGET==1),
+                      cnt_non_resp=sum(TARGET==0)
+                      ), by=deciles][order(-deciles)]
+
+rank.holdout$rrate <- round(rank.holdout$cnt_resp / rank.holdout$cnt,4); 
+rank.holdout$cum_resp <- cumsum(rank.holdout$cnt_resp) 
+rank.holdout$cum_non_resp <- cumsum(rank.holdout$cnt_non_resp) 
+rank.holdout$cum_rel_resp <- round(rank.holdout$cum_resp / sum(rank.holdout$cnt_resp),4); 
+rank.holdout$cum_rel_non_resp <- round(rank.holdout$cum_non_resp / sum(rank.holdout$cnt_non_resp),4); 
+rank.holdout$ks <- abs(rank.holdout$cum_rel_resp - rank.holdout$cum_rel_non_resp) * 100; 
+rank.holdout$rrate <- percent(rank.holdout$rrate) 
+rank.holdout$cum_rel_resp <- percent(rank.holdout$cum_rel_resp) 
+rank.holdout$cum_rel_non_resp <- percent(rank.holdout$cum_rel_non_resp) 
+rank.holdout
+
+```
+
+KS and Area under Curve
+```{r}
+library(ROCR)
+library(ineq)
+
+pred.holdout <- prediction(cart.holdout$predict.score[,2], cart.holdout$TARGET) 
+perf.holdout <- performance(pred.holdout, "tpr", "fpr") 
+plot(perf.holdout)
+
+KS.holdout <- max(attr(perf.holdout, 'y.values')[[1]]-attr(perf.holdout, 'x.values')[[1]]) 
+
+auc.holdout <- performance(pred.holdout,"auc"); 
+auc.holdout <- as.numeric(auc.holdout@y.values) 
+
+gini.holdout = ineq(cart.holdout$predict.score[,2], type="Gini") 
+with(cart.holdout, table(TARGET, predict.class)) 
+
+plot(perf.holdout)
+
+```
+
+cart.holdout - Confusion Matrix, using CARET and an excellent library that helps us not just bringing the accuracy, but others fine measurements such as:
+sensivity, Specificity
+```{r}
+library(caret)
+library(e1071)
+cart.holdout$TARGET = as.factor(cart.holdout$TARGET)
+cm.holdout = confusionMatrix(cart.holdout$predict.class, cart.holdout$TARGET, positive = "1")
+print(cm.holdout)
+class(cart.holdout$TARGET)
+class(cart.holdout$predict.class)
+```
+
+#--------------------------------------------------------------------------------------------------------------------------------------------------*

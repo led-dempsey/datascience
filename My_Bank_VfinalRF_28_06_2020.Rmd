@@ -1,0 +1,286 @@
+---
+title: "My Bank Case Study Overview and Random Forest"
+date: "28/06/2020"
+output:
+  html_document:
+    df_print: paged
+Author: Luiz Eduardo Dempsey
+---
+The Project:
+Part 1 - Classification Tree
+*	Split data into Development (70%) and Hold-out (30%) Sample
+*	Build Classification Tree using CART technique
+*	Do necessary pruning
+*	Measure Model Performance on Development Sample
+*	Test Model Performance on Hold Out Sample
+*	Ensure the model is not an overfit model
+
+Part 2 - Random Forest
+*	Split data into Development (70%) and Hold-out (30%) Sample
+*	Build Model using Random Forest technique
+*	Measure Model Performance on Development Sample
+*	Test Model Performance on Hold Out Sample
+*	Ensure the model is not an overfit model
+
+Lets export the data, import dataset, search for missing values and take an overall view
+```{r}
+setwd("C:/Users/adminsa/Desktop/Pos Graduacao/Machine Learning/Mybank")
+
+read.csv("My Bank Case Study-dataset.csv", header = TRUE)
+
+personal_loan <- read.table("My Bank Case Study-dataset.csv", sep = ",", header = TRUE)
+
+View(personal_loan)
+
+summary(personal_loan)
+#apparently there is no missing values
+
+str(personal_loan)
+
+class(personal_loan$FLG_HAS_ANY_CHGS)
+
+```
+
+
+Lets take a closer look into the dataset through plotting and remove useless columns
+```{r}
+library("VIM")
+
+aggr(personal_loan, prop = F, cex.axis = 0.4, numbers = T)
+#There is no missing values
+
+#ID numbers and random numbers could be extracted
+
+```
+
+Treating variables, imported data dictionary as a support guide for variable treatment
+```{r}
+setwd("C:/Users/adminsa/Desktop/Pos Graduacao/Machine Learning/Mybank")
+
+library(readxl)
+mybank_dictionary = read_excel("My Bank Case Study-Data dictionary.xlsx")
+personal_loan$FLG_HAS_CC <- as.factor(personal_loan$FLG_HAS_CC)
+personal_loan$FLG_HAS_ANY_CHGS <- as.factor(personal_loan$FLG_HAS_ANY_CHGS)
+personal_loan$FLG_HAS_NOMINEE <- as.factor(personal_loan$FLG_HAS_NOMINEE)
+personal_loan$FLG_HAS_OLD_LOAN <- as.factor(personal_loan$FLG_HAS_OLD_LOAN)
+personal_loan$ACC_OP_DATE <- as.character(personal_loan$ACC_OP_DATE)
+
+library(lubridate)
+mdy <- mdy(personal_loan$ACC_OP_DATE) 
+dmy <- dmy(personal_loan$ACC_OP_DATE) 
+mdy[is.na(mdy)] <- dmy[is.na(mdy)] 
+personal_loan$ACC_OP_DATE <- mdy 
+View(personal_loan)
+summary(personal_loan)
+
+```
+
+Visualisation of all the independent and numeric variables through Correlation matrix plot and response rate for the loan proposal.
+We found a response rate of 12,56% 
+```{r}
+num_data <- subset(personal_loan[-c(2,4,6,7,10,11,21,28,38,39)])
+
+names(num_data)
+library(corrplot)
+str(num_data)
+
+plt=cor(num_data [ ,-1])
+correlation_plot<-corrplot(plt, method="circle",tl.cex=0.5)
+
+corrplot(plt, method="circle",tl.cex=0.5)
+response_rate <- (sum(personal_loan$TARGET)/nrow(personal_loan))* 100
+response_rate
+
+```
+
+Splittting the data into: Training set; test set: <- Used in part2 Random Forest solution
+```{r}
+library(caret)
+set.seed(123)
+index <- createDataPartition(personal_loan$TARGET, p=0.70, list=FALSE)
+train <- personal_loan [ index,]
+test  <- personal_loan [-index,]
+
+```
+
+#--------------------------------------------------------------------------------------------------------------------------------------------------
+
+Part 2 <- Random Forest
+From the output bellow, we find that the Out Of Bag (OOB) error rate is estimated as 12.39% which is the misclassification error rate of the model(OOB)
+We notice that around the this tree number there is no significant reduction in error rate: (Random_Forest_err.rate)
+ [16,] 0.1221500 2.776190e-03 0.9604358
+ [17,] 0.1214633 1.959024e-03 0.9604585
+ [18,] 0.1212489 1.387642e-03 0.9627507
+ [19,] 0.1212489 1.550894e-03 0.9616046
+ [20,] 0.1214372 1.305803e-03 0.9644903
+```{r}
+library(randomForest)
+
+Random_Forest <- randomForest(as.factor(TARGET) ~ ., data = train[,-1], 
+                   ntree=501, mtry = 7, nodesize = 140,
+                   importance=TRUE)
+
+print(Random_Forest)
+
+plot(Random_Forest,main = "")
+
+Random_Forest$err.rate
+
+```
+
+Reaching the optimal tree number (16) lowest OOB, Tuning the random forest created and right after the variables Importance, plot with mean decrease (accuracy , Gini)
+```{r}
+library(randomForest)
+tRandom_Forest <- tuneRF(x = train[,-c(1,2)], 
+              y=as.factor(train$TARGET),
+              mtryStart = 7, 
+              ntreeTry=13, 
+              stepFactor = 1.5, 
+              improve = 0.001, 
+              trace=TRUE, 
+              plot = TRUE,
+              doBest = TRUE,
+              nodesize = 140, 
+              importance=TRUE
+)
+
+print(tRandom_Forest)
+
+tRandom_Forest$importance
+
+varImpPlot(tRandom_Forest,
+           sort = T,
+           main="Variable Importance",
+           n.var=37)
+
+```
+
+Scoring syntax <- Create columns for predicts score and class
+```{r}
+train$predict.class <- predict(tRandom_Forest, train, type="class")
+train$predict.score <- predict(tRandom_Forest, train, type="prob")
+head(train)
+
+View(train)
+
+```
+
+Model Performance Measures - Rank ordering - TrainSet
+```{r}
+library("StatMeasures")
+decile <- function(x){
+  deciles <- vector(length=10)
+  for (i in seq(0.1,1,.1)){
+    deciles[i*10] <- quantile(x, i, na.rm=T)
+  }
+      return (
+    ifelse(x<deciles[1], 1,
+           ifelse(x<deciles[2], 2,
+                  ifelse(x<deciles[3], 3,
+                         ifelse(x<deciles[4], 4,
+                                ifelse(x<deciles[5], 5,
+                                       ifelse(x<deciles[6], 6,
+                                              ifelse(x<deciles[7], 7,
+                                                     ifelse(x<deciles[8], 8,
+                                                            ifelse(x<deciles[9], 9, 10
+                                                            ))))))))))
+}
+
+
+train$deciles <- decile(train$predict.score[,2])
+
+library(data.table)
+tmp_DT_rf = data.table(train)
+rank_rf <- tmp_DT_rf[, list(
+  cnt = length(TARGET), 
+  cnt_resp = sum(TARGET), 
+  cnt_non_resp = sum(TARGET == 0)), 
+  by=deciles][order(-deciles)]
+rank_rf$rrate <- round (rank_rf$cnt_resp / rank_rf$cnt,2);
+rank_rf$cum_resp <- cumsum(rank_rf$cnt_resp)
+rank_rf$cum_non_resp <- cumsum(rank_rf$cnt_non_resp)
+rank_rf$cum_rel_resp <- round(rank_rf$cum_resp / sum(rank_rf$cnt_resp),2);
+rank_rf$cum_rel_non_resp <- round(rank_rf$cum_non_resp / sum(rank_rf$cnt_non_resp),2);
+rank_rf$ks <- abs(rank_rf$cum_rel_resp - rank_rf$cum_rel_non_resp)
+
+library(scales)
+rank_rf$rrate <- percent(rank_rf$rrate)
+rank_rf$cum_rel_resp <- percent(rank_rf$cum_rel_resp)
+rank_rf$cum_rel_non_resp <- percent(rank_rf$cum_rel_non_resp)
+rank_rf
+
+```
+
+Receiver Operating Characteristic (ROC)
+A Receiver Operating Characteristic (ROC) Curve is a way to compare diagnostic tests. It is a plot of the true positive rate against the false positive rate.* A ROC plot shows: The relationship between sensitivity and specificity.
+
+```{r}
+library(ROCR)
+pred_rf <- prediction(train$predict.score[,2],train$TARGET)
+perf_rf <- performance(pred_rf, "tpr", "fpr")
+plot(perf_rf)
+
+```
+
+Validation of model using Test_Set <- Rank ordering technique:
+We have to create two columns as  we did with the train set <- Predict score; predict class
+```{r}
+test$predict.class <- predict(tRandom_Forest, test, type="class")
+test$predict.score <- predict(tRandom_Forest, test, type="prob")
+
+test$deciles <- decile(test$predict.score[,2])
+
+```
+
+Model Performance Measures - Rank ordering - TrainSet - Test Set
+```{r}
+tmp_DT_rf2 = data.table(test)
+h_rank_rf2 <- tmp_DT_rf2[, list(
+  cnt = length(TARGET), 
+  cnt_resp = sum(TARGET), 
+  cnt_non_resp = sum(TARGET == 0)) , 
+  by=deciles][order(-deciles)]
+h_rank_rf2$rrate <- round (h_rank_rf2$cnt_resp / h_rank_rf2$cnt,2);
+h_rank_rf2$cum_resp <- cumsum(h_rank_rf2$cnt_resp)
+h_rank_rf2$cum_non_resp <- cumsum(h_rank_rf2$cnt_non_resp)
+h_rank_rf2$cum_rel_resp <- round(h_rank_rf2$cum_resp / sum(h_rank_rf2$cnt_resp),2);
+h_rank_rf2$cum_rel_non_resp <- round(h_rank_rf2$cum_non_resp / sum(h_rank_rf2$cnt_non_resp),2);
+h_rank_rf2$ks <- abs(h_rank_rf2$cum_rel_resp - h_rank_rf2$cum_rel_non_resp)
+
+library(scales)
+h_rank_rf2$rrate <- percent(h_rank_rf2$rrate)
+h_rank_rf2$cum_rel_resp <- percent(h_rank_rf2$cum_rel_resp)
+h_rank_rf2$cum_rel_non_resp <- percent(h_rank_rf2$cum_rel_non_resp)
+
+h_rank_rf2
+
+```
+
+ROC curve (test set)
+```{r}
+library(ROCR)
+pred_rf2 <- prediction(test$predict.score[,2],test$TARGET)
+perf_rf2 <- performance(pred_rf2, "tpr", "fpr")
+plot(perf_rf2)
+
+```
+
+Confusion Matrix, as confusion_matrix1 <- Train set ** confusion_matrix2 <- Test Set
+```{r}
+library(caret)
+library(e1071)
+train$TARGET = as.factor(train$TARGET)
+class(train$TARGET)
+
+test$TARGET  = as.factor(test$TARGET)
+class(test$predict.class)
+
+#Train
+confusion_matrix1 = confusionMatrix(train$predict.class, train$TARGET, positive = "1")
+print(confusion_matrix1)
+
+#Test
+confusion_matrix2 = confusionMatrix(test$predict.class, test$TARGET, positive = "1")
+print(confusion_matrix1)
+```
+
